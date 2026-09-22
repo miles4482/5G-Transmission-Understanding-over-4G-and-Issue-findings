@@ -1,141 +1,169 @@
 # 4. Action Plan
 
-Phased, with owners and exit criteria. Phases are ordered so that the cheapest, highest-probability
-findings surface first, and so that you never spend effort proving something the previous phase has
-already ruled in or out.
+Phased so that cheap configuration checks run before drive tests, and so each phase has an exit
+criterion. Durations are omitted on purpose: the sequence is set by dependencies (you cannot
+interpret a drive test until Phase 0 has fixed the KPI definition), not by a calendar.
 
-Sequencing is by dependency, not by calendar. Phase 1 and Phase 2 items are mostly desk work and
-counter pulls that can run concurrently; Phase 3 requires field coordination.
+Owners below match a typical split (RAN, Tx, Core, IP, Performance). Rename them to your actual
+teams; keep the rule that **every action has one owner and one piece of evidence**.
+
+The detailed checks live in [Chapter 3](03-domain-by-domain-checks.md). This chapter is the order in
+which to run them and the bar for moving on.
 
 ---
 
-## Phase 0 — Establish that there is a problem, and agree how it will be measured
+## Phase 0 — Make the comparison honest
 
-**Purpose:** avoid spending an entire organisation's effort on a measurement artefact, and remove the
-"my data says otherwise" escape route from every subsequent meeting.
+**Goal:** decide whether a real throughput drop exists, separately for swapped sites and new sites.
 
-| # | Action | Owner | Exit criterion |
+| # | Action | Owner | Evidence |
 | --- | --- | --- | --- |
-| P0.1 | Document the Ericsson baseline KPI formula and the Huawei formula side by side; reconcile layer (PDCP SDU vs PDU), last-TTI exclusion, EN-DC attribution, filters, weighting | Performance / OSS, both vendors | One signed mapping table; a stated "apples-to-apples corrected baseline" |
-| P0.2 | Split reporting into **swapped sites** and **new sites**; never mix | Performance | Two independent trends |
-| P0.3 | Define the **referee test**: fixed UE model, fixed firmware, fixed on-net server, fixed locations, fixed time windows, single-stream **and** 8-stream, cell load recorded | RF / Drive test | Written test spec, agreed by the vendor in advance |
-| P0.4 | Re-measure 10 degraded swapped sites, 3 good swapped sites, 3 new sites with the referee test | RF / Drive test | Table of measured DL/UL per site, with RTT and cell load |
-| P0.5 | Adopt the **measurement contract** (§2.3): p99 at ≤60 s, per-segment tests, evidence-bearing claims, the four-mechanism checklist | Programme lead | Contract circulated; both vendor and Tx team acknowledge |
-| P0.6 | Compute the theoretical ceiling per cell with `tools/tx_budget.py` and confirm the baseline target is physically valid for the deployed TDD pattern, layers and modulation | RF planning | Target validated or corrected |
+| 0.1 | Write the Ericsson baseline formula and the Huawei formula side by side: layer (PDCP SDU vs PDU), last-TTI exclusion, EN-DC volume attribution, filters, aggregation | Performance | Formula sheet, signed by RAN vendor and Performance |
+| 0.2 | Recompute the last pre-swap month and the latest month with one common method | Performance | Two numbers, one method, delta in % |
+| 0.3 | Split the population: swapped sites vs new Huawei sites. Report DL and UL separately, per TDD carrier | Performance | Two trend lines |
+| 0.4 | Pick the reference cluster: 10 swapped sites with a clear drop, 5 swapped sites that held up, 5 new sites. Freeze this list; all later phases use it | Performance + RAN | Site list with cell IDs, baseline value, current value |
 
-**Gate:** if the corrected baseline shows ≤5 % delta, close the issue as measurement change. Otherwise
-carry a quantified, defensible degradation figure into Phase 1.
+**Exit:** a single agreed delta, in percent, for swapped sites, computed one way. If the delta is
+within the formula uncertainty established in 0.1, stop and re-baseline on the Huawei definition.
+Otherwise proceed, and quote this delta — not a dashboard screenshot — as the problem statement.
 
 ---
 
-## Phase 1 — Desk audit: find the hard caps (no field visits, highest yield per hour)
+## Phase 1 — Configuration sweep (no field work)
 
-**Purpose:** hard ceilings are configuration, and configuration can be read remotely. Most swap-related
-throughput regressions are found here.
+**Goal:** find every ceiling that is a configured number. These cause the majority of post-swap
+throughput drops and none of them require a night outage to *diagnose*.
 
-| # | Action | Owner | Exit criterion |
+Run on the 20-site reference list first, then on the full 5G population.
+
+| # | Action | Owner | Pass mark |
 | --- | --- | --- | --- |
-| P1.1 | **Per-site transport inventory**: BBU type, main control board, backhaul port type, **negotiated speed**, optical module rate, VLAN/IPsec status, first-mile media and capacity | RAN + Tx | Complete sheet for all swapped + new 5G sites; exception list of sites below 10G |
-| P1.2 | **Compare the gNB's configured transport bandwidth** (IP path / logical port / transmission resource group) against the physical port speed and the `tx_budget.py` requirement | RAN | Exception list of self-throttling nodes (**expect findings here**) |
-| P1.3 | Pull RAN transport drop and congestion counters for the hours of the failing tests: `VS.RscGroup.TxDropPkts`, `VS.IPRscGroup.TxDropPkts`, `VS.IPPath.TxDropPkts`/`RxDropPkts`, `VS.IP.TxDropPkts`, `VS.Gtpu.RxDropPkts`, plus resource-group congestion duration and flow-control available-bandwidth | RAN | Per-site table; any non-zero drop with low port utilisation is a confirmed internal bottleneck |
-| P1.4 | Pull Ethernet-port **Max** rate counters (`VS.FEGE.TxMaxSpeed`, `VS.FEGE.RxMaxSpeed`, `VS.FEGE.TxTotalBW`, `VS.FEGE.RxErrPackets`) — never the Mean variants | RAN | Port headroom proven or disproven per site |
-| P1.5 | Pull EN-DC transport evidence: `N.PDCP.DL.X2U.ReqRetransPackets`, `N.PDCP.Vol.DL.X2U.TrfPDU.Tx`, `N.PDCP.Vol.UL.X2U.TrfPDU.Rx`, `N.NsaDc.SgNB.AbnormRel.Trans`, `N.NsaDc.SgNB.Add.Att`/`.Succ`, PSCell change success | RAN | Quantified X2 health; bearer option (3 vs 3x) confirmed empirically |
-| P1.6 | **Decode one `SGNB ADDITION REQUEST`** per failing and per good site; read `SgNB UE Aggregate Maximum Bit Rate` and the requested-vs-admitted E-RAB lists | RAN + Core | Value recorded and compared; cap ruled in or out |
-| P1.7 | **Read the AMBRs**: HSS/UDM subscribed UE-AMBR and APN-AMBR (or Session-AMBR for SA) for the test SIMs; decode `Initial Context Setup Request` and `Attach Accept`. Test a 1023 Mbit/s and a 2000 Mbit/s profile to rule out boundary-encoding effects | Core | AMBR ceiling documented; test SIM confirmed uncapped |
-| P1.8 | Check `DCNR` / `restrictDCNR` and the `NR Restriction in EPS as Secondary RAT` bit | Core | EN-DC permitted end to end |
-| P1.9 | **Licence audit**: gNB throughput/MIMO/256QAM/CA/MU-MIMO keys, microwave capacity licences, router and UPF capacity licences | RAN + Tx + Core | No gaps, or a gap list with remediation |
-| P1.10 | **Parameter diff**: golden template vs live config for eNB and gNB, focused on TDD pattern, max layers, modulation, energy saving, MU-MIMO, PDCP (`pdcp-SN-SizeDL`), and all transport objects | RAN + vendor | Diff report with each deviation accepted or corrected |
-| P1.11 | **Policer / shaper / CIR audit** across the whole path: gNB, CSG, aggregation, core edge, security GW, plus per-VRF and per-service policies | Tx + IP | Every rate limit on the path listed with its value and justification |
-| P1.12 | **LAG/ECMP hash audit**: is TEID-aware hashing enabled on every LAG/ECMP hop? | IP | Hash configuration documented; TEID hashing enabled or a change request raised |
-| P1.13 | Confirm serving S-GW/PGW or UPF before vs after the swap, and the RTT to a fixed reference | Core + IP | Any anchor/RTT change quantified |
-| P1.14 | Fronthaul audit: eCPRI negotiated rate per 32T AAU (25G expected) and eCPRI port errors | RAN | All 32T AAUs confirmed at 25G |
+| 1.1 | Inventory per site: BBU, main board, backhaul port, negotiated speed, SFP type, eCPRI rate per AAU | RAN | 10GE+ backhaul, 25G eCPRI on every 32T AAU |
+| 1.2 | Dump IP-path bandwidth, `CARRYFLAG`, and resource-group bandwidth for user plane | RAN | Configured bandwidth ≥ Ch.2 single-user peak (~2.2 Gbit/s) on the NR path |
+| 1.3 | MTU on BBU, CSG, aggregation, core edge, firewall, UPF/S-GW | RAN + Tx + IP | ≥ 1600 end to end (≥ 1700 with IPsec), or a documented UE MTU that matches the real path |
+| 1.4 | One X2-AP trace: EN-DC option (3 / 3a / 3x), `SgNB UE Aggregate Maximum Bit Rate`, PDCP SN size | RAN | SgNB AMBR ≥ target; SN size 18-bit on the split bearer |
+| 1.5 | One S1 trace plus HSS dump for the same UE: APN-AMBR, UE-AMBR, `restrictDCNR` | Core | All three AMBRs ≥ target and consistent with 1.4 |
+| 1.6 | DSCP map QCI/5QI → RAN → CSG class → CIR/PIR/CBS, including the X2-U class | RAN + Tx | User plane in a class whose PIR ≥ single-user peak; X2-U in a low-latency class |
+| 1.7 | Licence: RAN throughput/layers/256QAM, IPsec throughput, UPF/S-GW throughput, firewall/CGNAT | RAN + Core + IP | No licence ceiling below the target |
+| 1.8 | Sync: GNSS vs PTP, lock state, TDD pattern compared across neighbouring cells | RAN + Tx | Locked, pattern identical across the 2.6 GHz neighbour set |
+| 1.9 | Parameter diff Ericsson → Huawei for the rows in Ch.3 §3.5.3 | RAN | Diff table; every mismatch either corrected or explicitly accepted |
 
-**Gate:** publish a findings list. In practice the majority of cases are resolved by P1.2, P1.6, P1.7,
-P1.9, P1.11 or P1.1.
+**Exit:** a punch list of confirmed configuration defects, each with site count. Fix the ones that are
+a parameter change (AMBR, path bandwidth, DSCP, SN size, TDD pattern) immediately, re-measure the
+reference cluster with the Phase 0 method, and carry only the **remaining** delta into Phase 2.
+Hardware changes (SFP, board, microwave) go onto the Phase 4 list with the evidence attached — do not
+wait for them to start Phase 2.
 
 ---
 
-## Phase 2 — Active measurement: prove where the packets die
+## Phase 2 — Segment isolation on two sites
 
-**Purpose:** convert opinion into per-segment measurement. Runs in parallel with Phase 1.
+**Goal:** on one site that is still degraded after Phase 1 and one healthy new site, name the segment
+that loses the throughput. Use the drill in Chapter 2 §2.4 and the decision tree in Chapter 3 §3.0.
 
-| # | Action | Owner | Exit criterion |
+| # | Action | Owner | Output |
 | --- | --- | --- | --- |
-| P2.1 | **Enable the gNB's own TWAMP and Y.1731 DM/LM** towards the S-GW/UPF and towards the eNB X2-U address, on the **user-plane DSCP**, on 10 degraded + 3 good sites. Collect `VS.BSTWAMP.*`, `VS.ETHDM.MaxRttDelay`, `VS.ETHDM.MaxRttJitter`, `VS.ETHLM.Forward.DropRate`, `VS.IPPM.Forword.*` | RAN | Measured per-direction delay, jitter and loss per site — **owned by RAN, not blocked on the Tx team** |
-| P2.2 | **MTU verification**: DF-bit ping sweep at 1400/1472/1500/1600 B, gNB → S-GW/UPF and gNB → eNB; record the largest size that passes on every path | RAN + IP | Per-path maximum MTU documented; target ≥1600 transport MTU |
-| P2.3 | Verify **PMTUD** is not black-holed: confirm ICMP type 3 code 4 and ICMPv6 type 2 traverse every hop; read fragment/reassembly counters | IP | PMTUD proven working, or the blocking hop identified |
-| P2.4 | **DSCP end-to-end capture**: capture at the gNB egress and at the core ingress, compare markings for S1-U/N3/X2-U | IP + Core | Marking preserved, or the remarking hop identified |
-| P2.5 | **Re-poll every hop at ≤60 s** and publish p95/p99, plus **per-queue output/tail/WRED drops** | Tx | p99 utilisation and drop table per hop for the test window |
-| P2.6 | **UDP ramp test** (0.5 / 1 / 1.5 / 2 / 2.5 Gbit/s) between a gNB-side and a UPF-side host; record the exact rate where loss starts | Tx + IP | A single number both teams accept as the transport ceiling |
-| P2.7 | **Segment decomposition tests** per §2.3 Rule 2: gNB→CSG, gNB→UPF, eNB↔gNB, UPF→internet server | Tx + IP + Core | Throughput and RTT per segment, so the failing segment is named |
-| P2.8 | **Leg isolation on air**: measure NR-only (LTE leg blocked), then EN-DC, then multi-stream vs single-stream | RF | Which leg and which traffic profile fails |
-| P2.9 | **Microwave deep dive** on affected hops: ACM profile histogram over 7 days, capacity vs time, licensed capacity, XPIC state, G.826 | Tx | Time-series proof of sustained capacity |
-| P2.10 | **Sync verification**: PTP servo state, phase error trend, GNSS lock, holdover events over 7 days | Tx + RAN | Phase error within the ~1100 ns network budget, no holdover during test windows |
-| P2.11 | Y.1564 / RFC 2544 **service activation test** on any service that never had one, at the target rate with the target frame sizes | Tx | Pass certificate per service |
-| P2.12 | UE-side capability and MSS check: decode UE capability, and capture a TCP SYN on SGi to read the negotiated MSS | RF + Core | UE capability and MSS confirmed correct |
+| 2.1 | DF-bit ping sweep gNB → UPF and eNB ↔ gNB at 1400 / 1472 / 1500 / 1600 | Tx | Path MTU per direction |
+| 2.2 | TWAMP or Y.1731 in the user-plane DSCP and in the X2-U DSCP, 15 min, both sites | Tx + RAN | Loss, RTT mean, RTT max, jitter per segment |
+| 2.3 | UDP ramp 0.5 / 1.0 / 1.5 / 2.0 Gbit/s from a host at the site to a host at the UPF | Tx + IP | The rate at which loss begins — this is the transport ceiling |
+| 2.4 | Per-class output-drop counters at ≤ 60 s during 2.3, on CSG, aggregation, and core edge | Tx + IP | The hop whose drops rise first |
+| 2.5 | Single-UE test: NR-only, then EN-DC, then 8 TCP streams, same server, RSRP/SINR window recorded | RAN | Three numbers per site |
+| 2.6 | During 2.5, capture MCS, rank, PRB allocation, and the port `TxMaxSpeed` | RAN | Radio-vs-transport classification per the table in §3.5.1 |
+| 2.7 | Diff every value against the healthy site | Performance | The first row that differs is the leading cause |
 
-**Gate:** the failing **segment** and the failing **mechanism** (capacity / loss / latency / MTU) are
-both named, with evidence.
+**Exit:** a one-page finding of the form "on site X, throughput is lost between A and B, evidence C".
+If the two sites differ at the radio row and nowhere in transport, close the transport track for that
+site and hand it to RF optimisation. If they differ at a hop, that hop is a Phase 4 work item, and
+you repeat Phase 2 on two more sites to confirm it is a class of fault rather than one bad tail.
 
 ---
 
-## Phase 3 — Fix, verify, and prevent recurrence
+## Phase 3 — Population proof
 
-| # | Action | Owner | Exit criterion |
+**Goal:** show the finding applies to the fleet, not just the lab site.
+
+| # | Action | Owner | Output |
 | --- | --- | --- | --- |
-| P3.1 | Correct the gNB configured transport bandwidth / resource-group model to match real port capacity and the `tx_budget.py` requirement | RAN | Before/after throughput on the same referee test |
-| P3.2 | Raise transport MTU to ≥1600 end to end; remove fragmentation; restore PMTUD; set MSS clamping correctly | IP + Tx | DF-bit 1500 B passes end to end; fragment counters flat |
-| P3.3 | Remove or re-scale leftover policers/shapers/CIRs; align them to the dimensioned requirement | Tx + IP | Config evidence + retest |
-| P3.4 | Restore DSCP marking and QoS maps end to end; re-tune queue/buffer sizing for NR microbursts | IP + Tx | Zero per-queue drops at the test rate |
-| P3.5 | Upgrade ports / optical modules / first-mile hops / ring segments identified as sub-10G | Tx | Per-site upgrade completion, then retest |
-| P3.6 | Enable TEID-aware LAG/ECMP hashing on all relevant hops | IP | Verified with exact-route checks; single-tunnel throughput improves |
-| P3.7 | Correct `SgNB UE Aggregate Maximum Bit Rate`, UE-AMBR/APN-AMBR and policy caps | RAN + Core | Decoded values match intent; retest |
-| P3.8 | Close licence gaps | RAN + Tx + Core | Licences installed; capability retested |
-| P3.9 | Correct radio parameter deviations found in P1.10 (TDD pattern, layers, modulation, energy saving, MU-MIMO, PDCP SN size) | RAN | Parameter audit clean |
-| P3.10 | Fix fronthaul negotiated below 25G on 32T AAUs | RAN | All AAUs at 25G |
-| P3.11 | **Re-dimension the transport plan** for the new radio capability (FDD 4T, TDD 32T, NR 32T), per site and per ring segment, using `tx_budget.py` | RAN planning + Tx | Approved dimensioning rule, e.g. "10GE minimum per 5G site, 25GE where 3×100 MHz plus LTE 32T coexist" |
-| P3.12 | Add permanent monitoring: p99 interface rate, per-queue drops, `VS.FEGE` Max counters, X2-U retransmissions, `N.NsaDc.SgNB.AbnormRel.Trans`, TWAMP delay/jitter/loss, fragment counters, PTP phase error | OSS + Tx | Dashboard live with thresholds and alarms |
-| P3.13 | Make Y.1564 activation testing and an MTU/DSCP verification step **mandatory acceptance criteria** for every remaining swap and new site | Programme lead | Updated acceptance checklist in the rollout process |
-| P3.14 | Retest the full referee suite on all Phase-0 sites and publish before/after | RF + Performance | Baseline achieved, or a residual gap quantified with its cause |
+| 3.1 | Turn the Phase 2 signature into a counter rule (examples: `VS.IPPath.TxDropPkts` > 0 while a speed test runs; `VS.FEGE.TxMaxSpeed` pinned at 1 Gbit/s; `N.NsaDc.SgNB.AbnormRel.Trans` > 0; TWAMP peak drop > 0) | Performance + RAN | A report, all 5G sites |
+| 3.2 | ECMP/LAG audit on the common path: hash inputs, per-member utilisation under load, TEID hashing yes/no | IP | Pass/fail per bundle, with a template change if it fails |
+| 3.3 | RTT comparison for the reference cluster against the pre-swap probe history | Tx + Core | Sites where RTT, not loss, explains the TCP drop |
+| 3.4 | Separate the punch list into: port/hop upgrade, parameter fix, core policy, IP design, radio, sync | Performance | Five lists, no site in two lists unless the evidence says so |
+
+**Exit:** a ranked list. Rank by the size of the throughput gap times the number of sites, so the
+first remediation returns the most baseline.
 
 ---
 
-## 4.1 How to run the vendor conversation
+## Phase 4 — Remediate in evidence order
 
-The vendor's statement — "transmission capacity issues, so throughput cannot reach baseline" — is not
-actionable as written. Convert it into a claim that can be tested. Ask exactly this:
+Apply fixes in this order. Each one is verifiable on the reference cluster within one measurement
+cycle, so a fix that did nothing is visible immediately.
 
-1. **Which segment?** Fronthaul, last mile, ring, aggregation, core edge, or the node's own configured
-   bandwidth? Name the interface.
-2. **Which mechanism?** Capacity, loss, latency/jitter, or MTU? (The four in §2.3 Rule 5.)
-3. **What is the evidence?** Node, interface, timestamp, granularity, **p99** rate, configured
-   capacity, and drop counters. A 15-minute average is not evidence.
-4. **What is the required capacity, per your own dimensioning rule, for this exact radio
-   configuration?** Then compare it against `tx_budget.py` and against the delivered capacity.
-5. **Have you checked your own node's configured transport bandwidth** (IP path / logical port /
-   transmission resource group) against the physical port speed? Show the values.
-6. **What are the values of** `VS.RscGroup.TxDropPkts`, `VS.IPPath.TxDropPkts`,
-   `N.PDCP.DL.X2U.ReqRetransPackets`, `N.NsaDc.SgNB.AbnormRel.Trans`, and the resource-group
-   flow-control available-bandwidth counters during the failing tests?
-7. **What is the `SgNB UE Aggregate Maximum Bit Rate`** being signalled, and the MTU configured on the
-   transport interfaces?
+| Order | Fix | Why this order |
+| --- | --- | --- |
+| 1 | AMBR alignment (HSS, MME, SgNB AMBR) and RAN licence | Parameter-only, largest single-user effect, reversible |
+| 2 | IP-path / resource-group bandwidth, DSCP class, PDCP SN size, EN-DC option | Still parameter-only; removes RAN-internal shapers |
+| 3 | MTU uplift or MSS clamp, ICMP PMTUD allowed | Parameter plus a firewall rule; removes the black hole |
+| 4 | TEID hashing and hash-seed change on LAG/ECMP | Design change with a bounded blast radius; fixes the "one member full" case |
+| 5 | Port and first-mile upgrades: 1G → 10G SFP, RJ45 removed, microwave channel, PON profile, EVC CIR | Spend. Only for sites whose Phase 2 UDP ramp proved the hop ceiling |
+| 6 | UPF/S-GW rebalance, TCP optimiser decision, peering | Only when Phase 2 showed the loss past the RAN |
+| 7 | Sync and TDD-pattern alignment | Where clock or cross-link interference was evidenced |
+| 8 | Radio parameters (SRS, CSI, layer cap) | Where Phase 2 classified the site as radio |
 
-Because the vendor now supplies **both** the RAN and the transmission, they own the end-to-end
-dimensioning. That removes the usual finger-pointing, and it means questions 4–7 are all answerable by
-one organisation. Put them in writing with a due date.
+**Rule:** one change family at a time on the reference cluster, then re-measure with the Phase 0
+method. Stacking five changes before measuring makes the next degradation undiagnosable.
 
-Equally, hold the internal Tx team to the same standard. "No Tx issue" must be accompanied by: p99 at
-≤60 s granularity per hop, per-queue drop counters, measured RTT/jitter, and an explicit MTU
-confirmation. If any of those four is missing, the statement is incomplete rather than wrong.
+---
 
-## 4.2 The one-sentence summary for management
+## Phase 5 — Lock the baseline so this does not recur
 
-> A 100 MHz 32T32R NR cell can schedule ~1.7 Gbit/s downlink, which needs **>2 Gbit/s of transport**
-> once encapsulation is counted; the LTE upgrades (FDD 2T→4T, TDD 4T→32T) raised the anchor's demand
-> on the same transport at the same time. The dispute persists because the vendor is arguing about
-> **instantaneous capacity and dimensioning** while the transmission team is reporting **availability
-> and average utilisation** — so both can be correct. It is resolved by measuring p99 rates and
-> per-queue drops per segment, verifying MTU end to end, and checking the caps configured inside the
-> RAN and the core, all of which are desk-level checks.
+| # | Action | Owner |
+| --- | --- | --- |
+| 5.1 | Publish the Huawei-era baseline, split by swapped vs new, DL vs UL, with the formula in the same document | Performance |
+| 5.2 | Add permanent alarms: backhaul negotiated speed < 10GE, eCPRI < 25G on a 32T AAU, IP-path drop counters increasing, SCTP retransmits, PTP unlock, LAG member down | RAN + Tx |
+| 5.3 | Add a commissioning gate for every new 5G site: port speed, eCPRI rate, path bandwidth, MTU, AMBR trace, PTP lock. A site that fails the gate does not join the throughput KPI | RAN |
+| 5.4 | Keep `tools/tx_budget.py` with the site design pack. When a carrier is added, rerun it and update the CIR before the carrier is on-air | RAN planning + Tx |
+| 5.5 | Agreement with the RAN vendor: a "transport capacity" statement is submitted with the four-mechanism evidence from Ch.2 Rule 5, or it is returned | RAN + Tx |
 
-Continue to [Chapter 5: Evidence templates](05-evidence-templates.md).
+---
+
+## Working agreement for the vendor meeting
+
+Open with this, so the meeting spends its time on evidence:
+
+1. We accept that transport can limit 5G throughput, and we will upgrade every hop that a UDP ramp shows is short of the TS 38.306-based budget.
+2. A 15-minute utilisation average is not evidence either way. The shared standard is p99 at one minute or finer, plus per-class drops, plus RTT, plus a DF-bit MTU test.
+3. The RAN side will arrive with the Phase 1 dumps (port, path bandwidth, SgNB AMBR, licence, sync) so any cap inside the base station is on the table at the same time as the hop table.
+4. Sites are split into swapped and new. They are not one KPI.
+5. We will name the segment on two reference sites before any network-wide re-architecture.
+
+Suggested standing agenda, one page per item, evidence attached:
+
+| Item | Presented by |
+| --- | --- |
+| Agreed delta from Phase 0 | Performance |
+| Phase 1 punch list: configuration ceilings found | RAN |
+| Hop table for the reference sites vs the Ch.2 budget | Tx |
+| AMBR trace, three values | Core |
+| MTU map and ECMP hash | IP |
+| Decision: which Phase 4 items start now | All |
+
+---
+
+## Questions to put to the vendor in writing
+
+"Transmission capacity, so throughput cannot reach baseline" is not actionable. Because the vendor now supplies both the RAN and the transmission, the answers below all sit with one organisation. Ask for each one with a node, an interface, and a timestamp attached.
+
+1. **Which segment?** Fronthaul, last mile, ring, aggregation, core edge, or the bandwidth configured inside the base station?
+2. **Which mechanism?** Capacity, loss, latency/jitter, or MTU? (Chapter 2, Rule 5.)
+3. **What is the evidence?** p99 rate at one minute or finer, configured capacity, and per-class drops. A 15-minute average is not evidence.
+4. **What capacity does your own dimensioning rule require** for this radio configuration? Compare it with `tools/tx_budget.py` and with what was delivered.
+5. **What is the configured IP-path and resource-group bandwidth**, and how does it compare with the physical port speed?
+6. **What did these counters do during a failing test?** `VS.RscGroup.TxDropPkts`, `VS.IPPath.TxDropPkts`, `N.PDCP.DL.X2U.ReqRetransPackets`, `N.NsaDc.SgNB.AbnormRel.Trans`.
+7. **What `SgNB UE Aggregate Maximum Bit Rate` is signalled**, and what MTU is configured on the transport interfaces?
+
+Hold the internal transmission team to the same bar. "No transmission issue" needs p99 per hop, per-queue drops, measured RTT and jitter, and a DF-bit MTU result. A statement missing any of those four is incomplete.
+
+## One paragraph for management
+
+A 100 MHz 32T32R NR cell can schedule about **1.7 Gbit/s** downlink, which needs **over 2 Gbit/s of transport** once encapsulation is counted, and the LTE upgrades (FDD 2T→4T, TDD 4T→32T) raised demand on the same ports at the same time. The dispute continues because the vendor is describing instantaneous capacity and dimensioning, while the transmission team is reporting availability and average utilisation, so both can be correct. It is closed by desk checks first — port speed, the shaper inside the base station, MTU, and the AMBR values — and only then by a per-segment UDP ramp on two reference sites.
