@@ -23,6 +23,12 @@ What changed: NR stayed **32T32R**, LTE FDD went **2T → 4T**, LTE TDD went **4
 | 5 | [Evidence templates](docs/05-evidence-templates.md) | Site record, hop table, AMBR trace, counters, commands, alarms |
 | 6 | [Standards and references](docs/06-standards-and-references.md) | The 3GPP and ITU-T clauses behind each claim |
 
+## This network: 40 MHz, Option 3x, ~100 Mbit/s vs 250 Mbit/s
+
+The procedure for that specific gap — where to read `SgNB UE Aggregate Maximum Bit Rate`, why a transport probe cannot see it, and which of the three AMBRs to change — is [Chapter 7](docs/07-40mhz-option3x-sgnb-ambr.md).
+
+On 40 MHz / 30 kHz / DDDSU the 4-layer 256QAM peak is **674 Mbit/s**, so 250 Mbit/s is a reasonable good-coverage result and a flat 100 Mbit/s is a rate cap or a rank/MCS limit, not a full GE port.
+
 ## Reproduce the budget
 
 ```bash

@@ -42,6 +42,13 @@ class FormulaTest(unittest.TestCase):
         self.assertGreater(ul, 250)
         self.assertLess(ul, 320)
 
+    def test_40mhz_four_layer_peak(self):
+        # 40 MHz, 30 kHz, 106 PRB, 4 layers, 256QAM, DDDSU. Quoted in chapter 7.
+        dl, ul = tb.NrCarrier(bandwidth_mhz=40).peak_mbps()
+        self.assertAlmostEqual(dl, 674.1, delta=1.0)
+        self.assertGreater(ul, 90)
+        self.assertLess(ul, 130)
+
     def test_fdd_pattern_returns_the_unsplit_peak(self):
         split = tb.NrCarrier(tdd_pattern="DDDSU").peak_mbps()[0]
         full = tb.NrCarrier(tdd_pattern="FDD").peak_mbps()[0]
